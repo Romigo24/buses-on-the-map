@@ -5,9 +5,10 @@ import logging
 import sys
 import time
 import argparse
-from dataclasses import dataclass
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any
 from contextlib import suppress
+from pydantic import BaseModel, Field, ValidationError, validator
+from pydantic import ConfigDict
 
 
 logging.basicConfig(
@@ -65,91 +66,75 @@ def configure_logging(verbose_level: int):
         logging.getLogger().setLevel(logging.WARNING)
 
 
+class BusData(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    busId: str = Field(..., min_length=1)
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+    route: str = Field(..., min_length=1)
+
+    @validator('busId')
+    def bus_id_not_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError('busId cannot be empty')
+        return v.strip()
+
+    @validator('route')
+    def route_not_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError('route cannot be empty')
+        return v.strip()
+
+
+class WindowBoundsData(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    south_lat: float = Field(..., ge=-90, le=90)
+    north_lat: float = Field(..., ge=-90, le=90)
+    west_lng: float = Field(..., ge=-180, le=180)
+    east_lng: float = Field(..., ge=-180, le=180)
+
+    @validator('north_lat')
+    def north_greater_than_south(cls, v, values):
+        if 'south_lat' in values and v <= values['south_lat']:
+            raise ValueError('north_lat must be greater than south_lat')
+        return v
+
+    @validator('east_lng')
+    def east_greater_than_west(cls, v, values):
+        if 'west_lng' in values and v <= values['west_lng']:
+            raise ValueError('east_lng must be greater than west_lng')
+        return v
+
+
+class NewBoundsMessage(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    msgType: str
+    data: WindowBoundsData
+
+    @validator('msgType')
+    def validate_msg_type(cls, v):
+        if v != 'newBounds':
+            raise ValueError(f'Unknown msgType: {v}')
+        return v
+
+
 def create_error_response(errors: List[str]) -> str:
-    """Создает JSON ответ с ошибками"""
     return json.dumps({
         "msgType": "Errors",
         "errors": errors
     }, ensure_ascii=False)
 
 
-def validate_bus_data(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    errors = []
-
-    required_fields = ['busId', 'lat', 'lng', 'route']
-    for field in required_fields:
-        if field not in data:
-            errors.append(f"Missing required field: {field}")
-
-    if errors:
-        return False, errors
-
-    if not isinstance(data['busId'], str):
-        errors.append("busId must be a string")
-
-    try:
-        lat = float(data['lat'])
-        if not (-90 <= lat <= 90):
-            errors.append(f"lat must be between -90 and 90, got {lat}")
-    except (ValueError, TypeError):
-        errors.append(f"lat must be a number, got {data['lat']}")
-
-    try:
-        lng = float(data['lng'])
-        if not (-180 <= lng <= 180):
-            errors.append(f"lng must be between -180 and 180, got {lng}")
-    except (ValueError, TypeError):
-        errors.append(f"lng must be a number, got {data['lng']}")
-
-    if not isinstance(data['route'], str):
-        errors.append("route must be a string")
-
-    return len(errors) == 0, errors
-
-
-def validate_bounds_data(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    errors = []
-
-    required_fields = ['south_lat', 'north_lat', 'west_lng', 'east_lng']
-    for field in required_fields:
-        if field not in data:
-            errors.append(f"Missing required field: {field}")
-
-    if errors:
-        return False, errors
-
-    try:
-        south_lat = float(data['south_lat'])
-        north_lat = float(data['north_lat'])
-        west_lng = float(data['west_lng'])
-        east_lng = float(data['east_lng'])
-
-        if not (-90 <= south_lat <= 90):
-            errors.append(f"south_lat must be between -90 and 90, got {south_lat}")
-        if not (-90 <= north_lat <= 90):
-            errors.append(f"north_lat must be between -90 and 90, got {north_lat}")
-        if not (-180 <= west_lng <= 180):
-            errors.append(f"west_lng must be between -180 and 180, got {west_lng}")
-        if not (-180 <= east_lng <= 180):
-            errors.append(f"east_lng must be between -180 and 180, got {east_lng}")
-
-        if south_lat >= north_lat:
-            errors.append(f"south_lat ({south_lat}) must be less than north_lat ({north_lat})")
-        if west_lng >= east_lng:
-            errors.append(f"west_lng ({west_lng}) must be less than east_lng ({east_lng})")
-    except (ValueError, TypeError) as e:
-        errors.append(f"Invalid numeric values: {e}")
-
-    return len(errors) == 0, errors
-
-
-@dataclass
 class Bus:
-    bus_id: str
-    lat: float
-    lng: float
-    route: str
-    timestamp: float
+    def __init__(self, bus_id: str, lat: float, lng: float, route: str, timestamp: float):
+        self.bus_id = bus_id
+        self.lat = lat
+        self.lng = lng
+        self.route = route
+        self.timestamp = timestamp
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -160,12 +145,12 @@ class Bus:
         }
 
 
-@dataclass
 class WindowBounds:
-    south_lat: float
-    north_lat: float
-    west_lng: float
-    east_lng: float
+    def __init__(self, south_lat: float, north_lat: float, west_lng: float, east_lng: float):
+        self.south_lat = south_lat
+        self.north_lat = north_lat
+        self.west_lng = west_lng
+        self.east_lng = east_lng
     
     def is_inside(self, lat: float, lng: float) -> bool:
         return (self.south_lat <= lat <= self.north_lat and
@@ -177,15 +162,6 @@ class WindowBounds:
         self.north_lat = north_lat
         self.west_lng = west_lng
         self.east_lng = east_lng
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, float]) -> 'WindowBounds':
-        return cls(
-            south_lat=data.get('south_lat', 0),
-            north_lat=data.get('north_lat', 0),
-            west_lng=data.get('west_lng', 0),
-            east_lng=data.get('east_lng', 0)
-        )
 
 
 class BusServer:
@@ -254,34 +230,24 @@ class BusServer:
                         await self.send_error(ws, [f"Invalid JSON: {e}"])
                         continue
 
-                    if 'msgType' not in data:
-                        await self.send_error(ws, ["Requires msgType specified"])
-                        continue
-                    
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(json.dumps(data))
-                    
-                    if data.get('msgType') == 'newBounds':
-                        bounds_data = data.get('data', {})
-
-                        is_valid, errors = validate_bounds_data(bounds_data)
-                        if not is_valid:
-                            await self.send_error(ws, errors)
-                            continue
+                    try:
+                        bounds_message = NewBoundsMessage(**data)
 
                         bounds.update(
-                            south_lat=float(bounds_data.get('south_lat', 0)),
-                            north_lat=float(bounds_data.get('north_lat', 0)),
-                            west_lng=float(bounds_data.get('west_lng', 0)),
-                            east_lng=float(bounds_data.get('east_lng', 0))
+                            south_lat=bounds_message.data.south_lat,
+                            north_lat=bounds_message.data.north_lat,
+                            west_lng=bounds_message.data.west_lng,
+                            east_lng=bounds_message.data.east_lng
                         )
                         
-                        logger.debug("Границы обновлены")
-                    else:
-                        await self.send_error(ws, [f"Unknown msgType: {data.get('msgType')}"])
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug("Границы обновлены")
+
+                    except ValidationError as e:
+                        errors = [f"{err['loc'][0]}: {err['msg']}" for err in e.errors()]
+                        await self.send_error(ws, errors)
+                        continue
                     
-                except json.JSONDecodeError:
-                    await self.send_error(ws, ["Requires valid JSON"])
                 except trio_websocket.ConnectionClosed:
                     logger.info(f"Браузер #{browser_id} закрыл соединение")
                     break
@@ -328,21 +294,24 @@ class BusServer:
                         await self.send_error(ws, [f"Invalid JSON: {e}"])
                         continue
                     
-                    is_valid, errors = validate_bus_data(data)
-                    if not is_valid:
+                    try:
+                        bus_data = BusData(**data)
+
+                        bus = Bus(
+                            bus_id=bus_data.busId,
+                            lat=bus_data.lat,
+                            lng=bus_data.lng,
+                            route=bus_data.route,
+                            timestamp=time.time()
+                        )
+
+                        async with self._lock:
+                            self.buses[bus.bus_id] = bus
+
+                    except ValidationError as e:
+                        errors = [f"{err['loc'][0]}: {err['msg']}" for err in e.errors()]
                         await self.send_error(ws, errors)
                         continue
-
-                    bus = Bus(
-                        bus_id=data['busId'],
-                        lat=float(data['lat']),
-                        lng=float(data['lng']),
-                        route=data['route'],
-                        timestamp=time.time()
-                    )
-                    
-                    async with self._lock:
-                        self.buses[bus.bus_id] = bus
                     
                 except trio_websocket.ConnectionClosed:
                     logger.info("Имитатор автобусов отключился")
@@ -367,7 +336,7 @@ class BusServer:
     
     async def run(self):
         logger.info("=" * 60)
-        logger.info(" СЕРВЕР АВТОБУСОВ (с валидацией)")
+        logger.info(" СЕРВЕР АВТОБУСОВ ")
         logger.info("=" * 60)
         logger.info(f" Браузеры: ws://127.0.0.1:{self.browser_port}")
         logger.info(f" Автобусы: ws://127.0.0.1:{self.bus_port}")

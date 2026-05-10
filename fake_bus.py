@@ -11,7 +11,7 @@ from pathlib import Path
 from itertools import cycle, islice
 from typing import Dict, Any, Callable
 
-# Настройка логирования
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -202,7 +202,7 @@ async def send_updates(server_address: str, receive_channel: trio.MemoryReceiveC
 
 async def launch_simulation(args: argparse.Namespace):
     logger.info("=" * 80)
-    logger.info("ИМИТАТОР АВТОБУСОВ (с переподключением)")
+    logger.info("ИМИТАТОР АВТОБУСОВ ")
     logger.info("=" * 80)
     
     routes = load_routes('routes')
